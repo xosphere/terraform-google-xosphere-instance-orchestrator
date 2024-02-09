@@ -3,7 +3,7 @@ locals {
   version           = "0.1.0"
   xo_account_region = "us-west1"
   xo_project_id     = "io-backend-prod"
-  endpoint_url      = "https://portal-api.xosphere.io/v1"
+  endpoint_url      = "https://portal-api.xosphere.io"
   releases_bucket   = "xosphere-io-releases"
   regions           = join(",", var.regions_enabled)
   api_token_path    = format("projects/%s/secrets/customer_token__%s", local.xo_project_id, var.customer_id)
@@ -19,6 +19,7 @@ locals {
     "run.googleapis.com",
     "cloudscheduler.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
   ])
 }
 
@@ -33,42 +34,13 @@ resource "google_project_service" "project" {
   }
 }
 
-# role
-resource "google_project_iam_custom_role" "xosphere_instance_orchestrator" {
-  count       = var.iam_bindings_type == "project" ? 1 : 0
-  role_id     = "xosphere_instance_orchestrator"
-  title       = "Xosphere Instance Orchestrator"
-  description = "Role for Xosphere Instance Orchestrator"
-  permissions = [
+locals {
+  permissions_list = [
     "resourcemanager.projects.get",
     "compute.instanceTemplates.list",
     "compute.instanceGroupManagers.list",
     "compute.autoscalers.list",
-    "compute.instanceGroupManagers.get",
-    "compute.instanceTemplates.create",
-    "compute.subnetworks.get",
-    "compute.instanceGroupManagers.update",
-    "compute.instanceTemplates.useReadOnly",
-    "compute.instanceTemplates.get",
-    "compute.instances.create",
-    "compute.disks.create",
-    "compute.subnetworks.use",
-    "compute.instances.setMetadata",
-    "compute.instances.setLabels",
-  ]
-}
-
-resource "google_organization_iam_custom_role" "xosphere_instance_orchestrator" {
-  count       = (var.iam_bindings_type == "organization" || var.iam_bindings_type == "folder") ? 1 : 0
-  org_id      = var.organization_id
-  role_id     = "xosphere_instance_orchestrator"
-  title       = "Xosphere Instance Orchestrator"
-  description = "Role for Xosphere Instance Orchestrator"
-  permissions = [
-    "resourcemanager.projects.get",
-    "compute.instanceTemplates.list",
-    "compute.instanceGroupManagers.list",
-    "compute.autoscalers.list",
+    "compute.autoscalers.get",
     "compute.instanceGroupManagers.get",
     "compute.instanceTemplates.create",
     "compute.subnetworks.get",
@@ -82,6 +54,24 @@ resource "google_organization_iam_custom_role" "xosphere_instance_orchestrator" 
     "compute.instances.setLabels",
     "compute.instances.list",
   ]
+}
+
+# role
+resource "google_project_iam_custom_role" "xosphere_instance_orchestrator" {
+  count       = var.iam_bindings_type == "project" ? 1 : 0
+  role_id     = "xosphere_instance_orchestrator"
+  title       = "Xosphere Instance Orchestrator"
+  description = "Role for Xosphere Instance Orchestrator"
+  permissions = local.permissions_list
+}
+
+resource "google_organization_iam_custom_role" "xosphere_instance_orchestrator" {
+  count       = (var.iam_bindings_type == "organization" || var.iam_bindings_type == "folder") ? 1 : 0
+  org_id      = var.organization_id
+  role_id     = "xosphere_instance_orchestrator"
+  title       = "Xosphere Instance Orchestrator"
+  description = "Role for Xosphere Instance Orchestrator"
+  permissions = local.permissions_list
 }
 
 # service account
