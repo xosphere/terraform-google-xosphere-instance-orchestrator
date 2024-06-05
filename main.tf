@@ -24,6 +24,10 @@ locals {
   ])
 }
 
+data "google_project" "installed_project" {
+  project_id = var.project_id
+}
+
 resource "google_project_service" "project" {
   for_each = local.services
   project  = var.project_id
@@ -245,7 +249,7 @@ resource "google_pubsub_topic" "k8s_node_draining_topic" {
 
 # state bucket
 resource "google_storage_bucket" "instance_state_bucket" {
-  name                        = "xosphere-instance-orchestrator-state-${var.project_id}"
+  name                        = "xosphere-instance-orchestrator-state-${data.google_project.installed_project.number}"
   location                    = var.install_region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
