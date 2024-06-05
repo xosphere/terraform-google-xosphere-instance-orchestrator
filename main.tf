@@ -1,12 +1,11 @@
 # enable APIs
 locals {
-  version           = "0.1.0"
-  xo_account_region = "us-west1"
-  xo_project_id     = "io-backend-prod"
-  endpoint_url      = "https://portal-api.xosphere.io"
-  releases_bucket   = "xosphere-io-releases"
-  regions           = join(",", var.regions_enabled)
-  api_token_path    = format("projects/%s/secrets/customer_token__%s", local.xo_project_id, var.customer_id)
+  version               = "0.1.0"
+  xo_account_region     = "us-west1"
+  xo_project_id         = "io-backend-prod"
+  endpoint_url          = "https://portal-api.xosphere.io"
+  releases_bucket       = "xosphere-io-releases"
+  api_token_path        = format("projects/%s/secrets/customer_token__%s", local.xo_project_id, var.customer_id)
   xo_support_project_id = "xosphere-io-support"
 
 
@@ -20,6 +19,8 @@ locals {
     "cloudscheduler.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
+    "eventarc.googleapis.com",
+    "pubsub.googleapis.com"
   ])
 }
 
@@ -41,18 +42,28 @@ locals {
     "compute.instanceGroupManagers.list",
     "compute.autoscalers.list",
     "compute.autoscalers.get",
+    "compute.autoscalers.update",
     "compute.instanceGroupManagers.get",
     "compute.instanceTemplates.create",
     "compute.subnetworks.get",
     "compute.instanceGroupManagers.update",
+    "compute.instanceGroupManagers.use",
     "compute.instanceTemplates.useReadOnly",
     "compute.instanceTemplates.get",
     "compute.instances.create",
     "compute.disks.create",
+    "compute.disks.setLabels",
     "compute.subnetworks.use",
+    "compute.subnetworks.useExternalIp",
     "compute.instances.setMetadata",
     "compute.instances.setLabels",
     "compute.instances.list",
+    "compute.instances.setTags",
+    "compute.networks.get",
+    "container.clusters.list",
+    "pubsub.topics.getIamPolicy",
+    "pubsub.topics.setIamPolicy",
+    "pubsub.topics.publish",
   ]
 }
 
@@ -82,18 +93,18 @@ resource "google_service_account" "xosphere_instance_orchestrator_service_accoun
 
 # logging config
 resource "google_logging_project_bucket_config" "logging_config" {
-    project          = var.project_id
-    location         = var.install_region
-    retention_days   = var.log_retention
-    enable_analytics = false
-    bucket_id        = "xosphere-io-logs"
+  project          = var.project_id
+  location         = var.install_region
+  retention_days   = var.log_retention
+  enable_analytics = false
+  bucket_id        = "xosphere-io-logs"
 }
 
 resource "google_logging_project_sink" "logging_sink" {
-  name = "xosphere-logs-sink"
-  destination = "logging.googleapis.com/${google_logging_project_bucket_config.logging_config.id}"
+  name                   = "xosphere-logs-sink"
+  destination            = "logging.googleapis.com/${google_logging_project_bucket_config.logging_config.id}"
   unique_writer_identity = true
-  filter = "(resource.type = \"cloud_run_revision\" AND resource.labels.service_name =~ \"^xosphere-*\") OR (resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id =~ \"^xosphere-*\")"
+  filter                 = "(resource.type = \"cloud_run_revision\" AND resource.labels.service_name =~ \"^xosphere-*\") OR (resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id =~ \"^xosphere-*\")"
 }
 
 # bindings
@@ -166,17 +177,70 @@ resource "google_cloudfunctions2_function" "xosphere_instance_orchestrator_funct
     min_instance_count               = 0
     max_instance_count               = 1
     timeout_seconds                  = var.function_timeout
-    environment_variables = {
+    environment_variables            = {
+      "TIMEOUT_IN_SECS" : var.function_timeout
+      "INSTALLED_REGION" : var.install_region
+      "MIN_ON_DEMAND" : var.min_on_demand
+      "INSTALLED_PROJECT" : var.project_id
+      "API_TOKEN_PATH" : local.api_token_path
+      "ENDPOINT_URL" : local.endpoint_url
+      "INSTANCE_STATE_BUCKET" : google_storage_bucket.instance_state_bucket.name
+      "PROJECT_ENABLED_LABEL_SUFFIX" : var.enabled_label_suffix
+      "K8S_NODE_DRAINING_TOPIC": google_pubsub_topic.k8s_node_draining_topic.name
+    }
+  }
+}
+
+resource "google_cloudfunctions2_function" "xosphere_terminator_function" {
+  name     = "xosphere-terminator-function"
+  project  = var.project_id
+  location = var.install_region
+
+  build_config {
+    runtime     = "go121"
+    entry_point = "handler"
+    source {
+      storage_source {
+        bucket = local.releases_bucket
+        object = "instance-orchestrator/${local.version}/terminator.zip"
+      }
+    }
+  }
+
+  service_config {
+    service_account_email = google_service_account.xosphere_instance_orchestrator_service_account.email
+
+    ingress_settings                 = "ALLOW_INTERNAL_ONLY"
+    available_cpu                    = var.function_cpu
+    available_memory                 = var.function_memory_size
+    min_instance_count               = 1
+    max_instance_count               = 100
+    timeout_seconds                  = var.function_timeout
+    environment_variables            = {
       "TIMEOUT_IN_SECS" : var.function_timeout
       "INSTALLED_REGION" : var.install_region
       "INSTALLED_PROJECT" : var.project_id
       "API_TOKEN_PATH" : local.api_token_path
       "ENDPOINT_URL" : local.endpoint_url
-      "INSTANCE_STATE_BUCKET" : google_storage_bucket.instance_state_bucket.name
-      "REGIONS" : local.regions
-      "PROJECT_ENABLED_LABEL_SUFFIX" : var.enabled_label_suffix
     }
   }
+
+  event_trigger {
+    trigger_region = var.install_region
+    event_type     = "google.cloud.pubsub.topic.v1.messagePublished"
+    pubsub_topic   = google_pubsub_topic.terminator_topic.id
+    retry_policy   = "RETRY_POLICY_RETRY"
+  }
+}
+
+resource "google_pubsub_topic" "terminator_topic" {
+  name = "xosphere-spot-termination-event-topic"
+  project = var.project_id
+}
+
+resource "google_pubsub_topic" "k8s_node_draining_topic" {
+  name = "xosphere-k8s-node-draining-topic"
+  project = var.project_id
 }
 
 # state bucket
@@ -230,7 +294,7 @@ resource "google_cloud_scheduler_job" "xosphere_instance_orchestrator_invoker" {
     uri         = google_cloudfunctions2_function.xosphere_instance_orchestrator_function.service_config[0].uri
     http_method = "POST"
     body        = base64encode("{}")
-    headers = {
+    headers     = {
       "Content-Type" = "application/json"
     }
     oidc_token {
@@ -240,12 +304,28 @@ resource "google_cloud_scheduler_job" "xosphere_instance_orchestrator_invoker" {
   }
 }
 
+resource "google_cloudfunctions2_function_iam_member" "xosphere_terminator_invoker" {
+  project        = google_cloudfunctions2_function.xosphere_terminator_function.project
+  location       = google_cloudfunctions2_function.xosphere_terminator_function.location
+  cloud_function = google_cloudfunctions2_function.xosphere_terminator_function.name
+  role           = "roles/cloudfunctions.invoker"
+  member         = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_invoker.email}"
+}
+
+resource "google_cloud_run_service_iam_member" "xosphere_terminator_invoker" {
+  project  = google_cloudfunctions2_function.xosphere_terminator_function.project
+  location = google_cloudfunctions2_function.xosphere_terminator_function.location
+  service  = google_cloudfunctions2_function.xosphere_terminator_function.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_invoker.email}"
+}
+
 # auto support
 resource "google_project_iam_member" "xosphere_instance_orchestrator_support_binding_logs" {
   count = var.enable_auto_support > 0 ? 1 : 0
 
   project = var.project_id
-  role   = "roles/logging.privateLogViewer"
+  role    = "roles/logging.privateLogViewer"
   member  = "serviceAccount:xosphere-io-auto-support@${local.xo_support_project_id}.iam.gserviceaccount.com"
   condition {
     title       = "xosphere-support-logs"

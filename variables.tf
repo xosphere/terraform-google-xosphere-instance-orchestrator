@@ -29,9 +29,9 @@ variable "enabled_label_suffix" {
   default     = ""
 }
 
-variable "regions_enabled" {
-  description = "Regions enabled for Instance Orchestrator"
-  default     = ["us-east1", "us-west1"]
+variable "min_on_demand" {
+  description = "min on-demand instances required for each managed instance group"
+  default = 0
 }
 
 variable "function_memory_size" {
