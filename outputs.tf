@@ -1,4 +1,4 @@
-output "drain_topic_name" {
+output "drain_topic_id" {
   value = google_pubsub_topic.k8s_node_draining_topic.id
 }
 
