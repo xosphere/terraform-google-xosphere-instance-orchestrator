@@ -20,6 +20,7 @@ locals {
     "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
     "eventarc.googleapis.com",
+    "logging.googleapis.com",
     "pubsub.googleapis.com"
   ])
 }
@@ -37,10 +38,15 @@ resource "google_project_service" "project" {
     create = "30m"
     update = "40m"
   }
+
+  disable_on_destroy = false
+
+  disable_dependent_services = true
 }
 
 locals {
   permissions_list = [
+    "artifactregistry.repositories.downloadArtifacts",
     "resourcemanager.projects.get",
     "compute.instanceTemplates.list",
     "compute.instanceGroupManagers.list",
@@ -65,9 +71,17 @@ locals {
     "compute.instances.setTags",
     "compute.networks.get",
     "container.clusters.list",
+    "logging.logEntries.create",
+    "logging.logEntries.route",
     "pubsub.topics.getIamPolicy",
     "pubsub.topics.setIamPolicy",
     "pubsub.topics.publish",
+    "secretmanager.versions.access",
+    "serviceusage.services.get",
+    "storage.buckets.get",
+    "storage.objects.get",
+    "storage.objects.list",
+    "storage.objects.create",
   ]
 }
 
@@ -154,6 +168,41 @@ resource "google_project_iam_member" "xosphere_instance_orchestrator_service_acc
   member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
 }
 
+resource "google_project_iam_member" "log_writer" {
+  count   = var.iam_bindings_type == "project" ? 1 : 0
+  project = google_service_account.xosphere_instance_orchestrator_service_account.project
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
+}
+
+
+resource "google_project_iam_member" "artifactory_writer" {
+  count   = var.iam_bindings_type == "project" ? 1 : 0
+  project = google_service_account.xosphere_instance_orchestrator_service_account.project
+  role    = "roles/artifactregistry.writer"
+  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
+}
+
+resource "google_project_iam_member" "storage_admin" {
+  count   = var.iam_bindings_type == "project" ? 1 : 0
+  project = google_service_account.xosphere_instance_orchestrator_service_account.project
+  role    = "roles/storage.objectAdmin"
+  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
+}
+
+resource "terraform_data" "waiter" {
+  depends_on = [
+    google_project_iam_custom_role.xosphere_instance_orchestrator,
+    google_project_iam_member.storage_admin,
+    google_project_iam_member.artifactory_writer,
+    google_project_iam_member.log_writer
+  ]
+
+  provisioner "local-exec" {
+    command = "sleep 30"
+  }
+}
+
 # cloud function
 resource "google_cloudfunctions2_function" "xosphere_instance_orchestrator_function" {
   name     = "xosphere-instance-orchestrator-function"
@@ -161,8 +210,9 @@ resource "google_cloudfunctions2_function" "xosphere_instance_orchestrator_funct
   location = var.install_region
 
   build_config {
-    runtime     = "go121"
-    entry_point = "handlerHttp"
+    runtime         = "go121"
+    entry_point     = "handlerHttp"
+    service_account = google_service_account.xosphere_instance_orchestrator_service_account.name
     source {
       storage_source {
         bucket = local.releases_bucket
@@ -190,9 +240,13 @@ resource "google_cloudfunctions2_function" "xosphere_instance_orchestrator_funct
       "ENDPOINT_URL" : local.endpoint_url
       "INSTANCE_STATE_BUCKET" : google_storage_bucket.instance_state_bucket.name
       "PROJECT_ENABLED_LABEL_SUFFIX" : var.enabled_label_suffix
-      "K8S_NODE_DRAINING_TOPIC": google_pubsub_topic.k8s_node_draining_topic.name
+      "K8S_NODE_DRAINING_TOPIC" : google_pubsub_topic.k8s_node_draining_topic.name
     }
   }
+
+  depends_on = [
+    terraform_data.waiter
+  ]
 }
 
 resource "google_cloudfunctions2_function" "xosphere_terminator_function" {
@@ -201,8 +255,9 @@ resource "google_cloudfunctions2_function" "xosphere_terminator_function" {
   location = var.install_region
 
   build_config {
-    runtime     = "go121"
-    entry_point = "handler"
+    runtime         = "go121"
+    entry_point     = "handler"
+    service_account = google_service_account.xosphere_instance_orchestrator_service_account.name
     source {
       storage_source {
         bucket = local.releases_bucket
@@ -214,13 +269,13 @@ resource "google_cloudfunctions2_function" "xosphere_terminator_function" {
   service_config {
     service_account_email = google_service_account.xosphere_instance_orchestrator_service_account.email
 
-    ingress_settings                 = "ALLOW_INTERNAL_ONLY"
-    available_cpu                    = var.function_cpu
-    available_memory                 = var.function_memory_size
-    min_instance_count               = 1
-    max_instance_count               = 100
-    timeout_seconds                  = var.function_timeout
-    environment_variables            = {
+    ingress_settings      = "ALLOW_INTERNAL_ONLY"
+    available_cpu         = var.function_cpu
+    available_memory      = var.function_memory_size
+    min_instance_count    = 1
+    max_instance_count    = 100
+    timeout_seconds       = var.function_timeout
+    environment_variables = {
       "TIMEOUT_IN_SECS" : var.function_timeout
       "INSTALLED_REGION" : var.install_region
       "INSTALLED_PROJECT" : var.project_id
@@ -235,15 +290,19 @@ resource "google_cloudfunctions2_function" "xosphere_terminator_function" {
     pubsub_topic   = google_pubsub_topic.terminator_topic.id
     retry_policy   = "RETRY_POLICY_RETRY"
   }
+
+  depends_on = [
+    terraform_data.waiter
+  ]
 }
 
 resource "google_pubsub_topic" "terminator_topic" {
-  name = "xosphere-spot-termination-event-topic"
+  name    = "xosphere-spot-termination-event-topic"
   project = var.project_id
 }
 
 resource "google_pubsub_topic" "k8s_node_draining_topic" {
-  name = "xosphere-k8s-node-draining-topic"
+  name    = "xosphere-k8s-node-draining-topic"
   project = var.project_id
 }
 
@@ -253,6 +312,7 @@ resource "google_storage_bucket" "instance_state_bucket" {
   location                    = var.install_region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
+  force_destroy               = true
 }
 
 resource "google_storage_bucket_iam_member" "instance_state_bucket_owner" {
@@ -306,6 +366,8 @@ resource "google_cloud_scheduler_job" "xosphere_instance_orchestrator_invoker" {
       service_account_email = google_service_account.xosphere_instance_orchestrator_invoker.email
     }
   }
+
+  depends_on = [google_cloudfunctions2_function.xosphere_instance_orchestrator_function]
 }
 
 resource "google_cloudfunctions2_function_iam_member" "xosphere_terminator_invoker" {
