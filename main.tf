@@ -46,7 +46,6 @@ resource "google_project_service" "project" {
 
 locals {
   permissions_list = [
-    "artifactregistry.repositories.downloadArtifacts",
     "resourcemanager.projects.get",
     "compute.instanceTemplates.list",
     "compute.instanceGroupManagers.list",
@@ -109,6 +108,11 @@ resource "google_service_account" "xosphere_instance_orchestrator_service_accoun
   display_name = "Xosphere Instance Orchestrator"
 }
 
+resource "google_service_account" "xosphere_instance_orchestrator_code_builder_service_account" {
+  account_id = "xosphere-io-code-builder"
+  display_name = "xosphere Instance Orchestrator Code Builder"
+}
+
 # logging config
 resource "google_logging_project_bucket_config" "logging_config" {
   project          = var.project_id
@@ -168,38 +172,40 @@ resource "google_project_iam_member" "xosphere_instance_orchestrator_service_acc
   member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
 }
 
-resource "google_project_iam_member" "log_writer" {
-  count   = var.iam_bindings_type == "project" ? 1 : 0
-  project = google_service_account.xosphere_instance_orchestrator_service_account.project
+resource "google_project_iam_member" "xosphere_instance_orchestrator_code_builder_service_account_project_binding_sa_user" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountUser"
+  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_code_builder_service_account.email}"
+}
+
+resource "google_project_iam_member" "xosphere_instance_orchestrator_code_builder_service_account_project_binding_log_writer" {
+  project = google_service_account.xosphere_instance_orchestrator_code_builder_service_account.project
   role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
+  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_code_builder_service_account.email}"
 }
 
-
-resource "google_project_iam_member" "artifactory_writer" {
-  count   = var.iam_bindings_type == "project" ? 1 : 0
-  project = google_service_account.xosphere_instance_orchestrator_service_account.project
+resource "google_project_iam_member" "xosphere_instance_orchestrator_code_builder_service_account_project_binding_artifactory_writer" {
+  project = google_service_account.xosphere_instance_orchestrator_code_builder_service_account.project
   role    = "roles/artifactregistry.writer"
-  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
+  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_code_builder_service_account.email}"
 }
 
-resource "google_project_iam_member" "storage_admin" {
-  count   = var.iam_bindings_type == "project" ? 1 : 0
-  project = google_service_account.xosphere_instance_orchestrator_service_account.project
+resource "google_project_iam_member" "xosphere_instance_orchestrator_code_builder_service_account_project_binding_storage_admin" {
+  project = google_service_account.xosphere_instance_orchestrator_code_builder_service_account.project
   role    = "roles/storage.objectAdmin"
-  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
+  member  = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_code_builder_service_account.email}"
 }
 
 resource "terraform_data" "waiter" {
   depends_on = [
-    google_project_iam_custom_role.xosphere_instance_orchestrator,
-    google_project_iam_member.storage_admin,
-    google_project_iam_member.artifactory_writer,
-    google_project_iam_member.log_writer
+    google_project_iam_member.xosphere_instance_orchestrator_code_builder_service_account_project_binding_artifactory_writer,
+    google_project_iam_member.xosphere_instance_orchestrator_code_builder_service_account_project_binding_log_writer,
+    google_project_iam_member.xosphere_instance_orchestrator_code_builder_service_account_project_binding_sa_user,
+    google_project_iam_member.xosphere_instance_orchestrator_code_builder_service_account_project_binding_storage_admin
   ]
 
   provisioner "local-exec" {
-    command = "sleep 30"
+    command = "sleep 60"
   }
 }
 
@@ -212,7 +218,7 @@ resource "google_cloudfunctions2_function" "xosphere_instance_orchestrator_funct
   build_config {
     runtime         = "go121"
     entry_point     = "handlerHttp"
-    service_account = google_service_account.xosphere_instance_orchestrator_service_account.name
+    service_account = google_service_account.xosphere_instance_orchestrator_code_builder_service_account.name
     source {
       storage_source {
         bucket = local.releases_bucket
@@ -257,7 +263,7 @@ resource "google_cloudfunctions2_function" "xosphere_terminator_function" {
   build_config {
     runtime         = "go121"
     entry_point     = "handler"
-    service_account = google_service_account.xosphere_instance_orchestrator_service_account.name
+    service_account = google_service_account.xosphere_instance_orchestrator_code_builder_service_account.name
     source {
       storage_source {
         bucket = local.releases_bucket
