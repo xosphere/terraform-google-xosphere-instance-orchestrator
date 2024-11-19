@@ -1,6 +1,6 @@
 # enable APIs
 locals {
-  version               = "0.1.0"
+  version               = "0.1.1"
   xo_account_region     = "us-west1"
   xo_project_id         = "io-backend-prod"
   endpoint_url          = "https://portal-api.xosphere.io"
@@ -21,7 +21,8 @@ locals {
     "compute.googleapis.com",
     "eventarc.googleapis.com",
     "logging.googleapis.com",
-    "pubsub.googleapis.com"
+    "pubsub.googleapis.com",
+    "cloudbilling.googleapis.com"
   ])
 }
 
@@ -130,6 +131,12 @@ resource "google_logging_project_sink" "logging_sink" {
 }
 
 # bindings
+resource "google_organization_iam_member" "xosphere_instance_orchestrator_service_account_billing_viewer_binding" {
+  org_id = var.organization_id
+  role   = "roles/billing.viewer"
+  member = "serviceAccount:${google_service_account.xosphere_instance_orchestrator_service_account.email}"
+}
+
 resource "google_organization_iam_member" "xosphere_instance_orchestrator_service_account_organization_binding" {
   count  = var.iam_bindings_type == "organization" ? 1 : 0
   org_id = var.organization_id
