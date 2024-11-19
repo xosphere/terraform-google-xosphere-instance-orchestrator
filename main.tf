@@ -1,6 +1,6 @@
 # enable APIs
 locals {
-  version               = "0.1.0"
+  version               = "0.1.1"
   xo_account_region     = "us-west1"
   xo_project_id         = "io-backend-prod"
   endpoint_url          = "https://portal-api.xosphere.io"
