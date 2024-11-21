@@ -53,6 +53,7 @@ locals {
     "compute.autoscalers.list",
     "compute.autoscalers.get",
     "compute.autoscalers.update",
+    "compute.commitments.list",
     "compute.instanceGroupManagers.get",
     "compute.instanceTemplates.create",
     "compute.subnetworks.get",
