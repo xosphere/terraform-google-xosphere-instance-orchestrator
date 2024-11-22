@@ -1,6 +1,6 @@
 # enable APIs
 locals {
-  version               = "0.1.1"
+  version               = "0.1.3"
   xo_account_region     = "us-west1"
   xo_project_id         = "io-backend-prod"
   endpoint_url          = "https://portal-api.xosphere.io"
@@ -255,6 +255,8 @@ resource "google_cloudfunctions2_function" "xosphere_instance_orchestrator_funct
       "INSTANCE_STATE_BUCKET" : google_storage_bucket.instance_state_bucket.name
       "PROJECT_ENABLED_LABEL_SUFFIX" : var.enabled_label_suffix
       "K8S_NODE_DRAINING_TOPIC" : google_pubsub_topic.k8s_node_draining_topic.name
+      "BINDING_TYPE": var.iam_bindings_type
+      "STRICT_TO_BINDING_TYPE": var.strict_to_binding_type
     }
   }
 
