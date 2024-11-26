@@ -13,6 +13,12 @@ variable "iam_bindings_type" {
   }
 }
 
+variable "strict_to_binding_type" {
+  type = bool
+  description = "If true and iam_bindings_type is project, only that project is enabled"
+  default = true
+}
+
 variable "iam_binding_folder" {
   description = "The folder ID to attach IAM bindings.  Only needed if iam_bindings_type is set to \"folder\""
   default     = null
